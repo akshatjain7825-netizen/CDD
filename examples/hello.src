@@ -1,0 +1,7 @@
+import "env" "print" fn print(ptr: *char, len: i32) -> void;
+
+export fn main() -> i32 {
+    let msg: *char = "Hello, WebAssembly!";
+    print(msg, 19);
+    return 0;
+}

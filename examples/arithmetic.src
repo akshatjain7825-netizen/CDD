@@ -1,0 +1,13 @@
+export fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+export fn compute(x: i32, y: i32) -> i32 {
+    let mut result: i32 = (x * 4) + (y / 2);
+    result = result ^ 255;
+    return result;
+}
+
+export fn float_calc(a: f64, b: f64) -> f64 {
+    return (a * 2.5) + (b / 1.5);
+}

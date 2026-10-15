@@ -1,0 +1,16 @@
+[package]
+name = "wasmc-daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+wasmc-driver = { path = "../wasmc-driver" }
+wasmc-cache = { path = "../wasmc-cache" }
+wasmc-diagnostics = { path = "../wasmc-diagnostics" }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }

@@ -1,0 +1,13 @@
+[package]
+name = "wasmc-stackifier"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+wasmc-diagnostics = { path = "../wasmc-diagnostics" }
+wasmc-lexer = { path = "../wasmc-lexer" }
+wasmc-mir = { path = "../wasmc-mir" }
+wasmc-semantics = { path = "../wasmc-semantics" }
+serde = { workspace = true }

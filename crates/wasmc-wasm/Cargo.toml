@@ -1,0 +1,16 @@
+[package]
+name = "wasmc-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+wasmc-diagnostics = { path = "../wasmc-diagnostics" }
+wasmc-lexer = { path = "../wasmc-lexer" }
+wasmc-ast = { path = "../wasmc-ast" }
+wasmc-semantics = { path = "../wasmc-semantics" }
+wasmc-mir = { path = "../wasmc-mir" }
+wasmc-stackifier = { path = "../wasmc-stackifier" }
+wasmc-memory = { path = "../wasmc-memory" }
+serde = { workspace = true }

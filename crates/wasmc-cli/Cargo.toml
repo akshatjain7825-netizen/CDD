@@ -1,0 +1,21 @@
+[package]
+name = "wasmc-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wasmc"
+path = "src/main.rs"
+
+[dependencies]
+wasmc-driver = { path = "../wasmc-driver" }
+wasmc-daemon = { path = "../wasmc-daemon" }
+wasmc-cache = { path = "../wasmc-cache" }
+wasmc-diagnostics = { path = "../wasmc-diagnostics" }
+clap = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

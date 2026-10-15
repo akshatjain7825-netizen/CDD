@@ -1,0 +1,12 @@
+[package]
+name = "wasmc-bindings"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+wasmc-lexer = { path = "../wasmc-lexer" }
+wasmc-semantics = { path = "../wasmc-semantics" }
+wasmc-wasm = { path = "../wasmc-wasm" }
+serde = { workspace = true }

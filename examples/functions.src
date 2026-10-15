@@ -1,0 +1,14 @@
+fn square(n: i32) -> i32 {
+    return n * n;
+}
+
+export fn sum_of_squares(a: i32, b: i32) -> i32 {
+    return square(a) + square(b);
+}
+
+export fn factorial(n: i32) -> i32 {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}

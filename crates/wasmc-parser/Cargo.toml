@@ -1,0 +1,11 @@
+[package]
+name = "wasmc-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+wasmc-diagnostics = { path = "../wasmc-diagnostics" }
+wasmc-lexer = { path = "../wasmc-lexer" }
+wasmc-ast = { path = "../wasmc-ast" }

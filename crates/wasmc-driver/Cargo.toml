@@ -1,0 +1,24 @@
+[package]
+name = "wasmc-driver"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+wasmc-diagnostics = { path = "../wasmc-diagnostics" }
+wasmc-lexer = { path = "../wasmc-lexer" }
+wasmc-ast = { path = "../wasmc-ast" }
+wasmc-parser = { path = "../wasmc-parser" }
+wasmc-semantics = { path = "../wasmc-semantics" }
+wasmc-hir = { path = "../wasmc-hir" }
+wasmc-mir = { path = "../wasmc-mir" }
+wasmc-optimizer = { path = "../wasmc-optimizer" }
+wasmc-stackifier = { path = "../wasmc-stackifier" }
+wasmc-memory = { path = "../wasmc-memory" }
+wasmc-wasm = { path = "../wasmc-wasm" }
+wasmc-bindings = { path = "../wasmc-bindings" }
+wasmc-cache = { path = "../wasmc-cache" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
