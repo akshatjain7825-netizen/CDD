@@ -3,6 +3,6 @@ export function instantiate(bytes: BufferSource | WebAssembly.Module, imports?: 
 
 export namespace exports {
   export const memory: WebAssembly.Memory;
-  export function print(arg0: number, arg1: number): void;
   export function main(): number;
+  export function print(arg0: number, arg1: number): void;
 }

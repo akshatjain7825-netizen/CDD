@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 use axum::{
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{get, post},
@@ -115,6 +116,7 @@ pub fn create_router(cache: Option<CompilationCache>) -> Router {
         .route("/api/v1/validate", post(handle_check))
         .route("/api/v1/cache/status", get(handle_cache_status))
         .route("/api/v1/health", get(handle_health))
+        .layer(DefaultBodyLimit::max(1024 * 1024))
         .with_state(state)
 }
 
@@ -127,7 +129,7 @@ async fn handle_cache_status(
 ) -> impl IntoResponse {
     if let Some(ref cache) = state.cache {
         match cache.get_status() {
-            Ok(status) => (StatusCode::OK, Json(serde_json::to_value(status).unwrap())).into_response(),
+            Ok(status) => (StatusCode::OK, Json(serde_json::to_value(status).unwrap_or_default())).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e.to_string() })),
@@ -142,15 +144,33 @@ async fn handle_cache_status(
                 total_functions: 0,
                 total_sessions: 0,
                 db_size_bytes: 0,
-            }).unwrap()),
+            }).unwrap_or_default()),
         )
             .into_response()
     }
 }
 
 async fn handle_check(
+    State(state): State<Arc<AppState>>,
     Json(payload): Json<DaemonCompileRequest>,
 ) -> impl IntoResponse {
+    let total_source_bytes: usize = payload.sources.iter().map(|s| s.content_utf8.len()).sum();
+    if total_source_bytes > 1024 * 1024 {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(DaemonCheckResponse {
+                status: "FAILED".to_string(),
+                diagnostics: vec![Diagnostic::error(
+                    "E0001",
+                    "Source payload exceeds 1 MB limit",
+                    wasmc_diagnostics::SourceSpan::empty(),
+                )],
+            }),
+        );
+    }
+
+    let cache_dir = state.cache.as_ref().map(|c| c.cache_dir().to_path_buf());
+
     let options = CompilerOptions {
         target: payload.target,
         opt_level: payload.opt_level,
@@ -158,6 +178,7 @@ async fn handle_check(
         shadow_stack_size: payload.memory_config.shadow_stack_bytes,
         emit_stack_check: payload.memory_config.emit_stack_overflow_check,
         bundle_allocator: payload.memory_config.bundle_default_allocator,
+        cache_dir,
         ..Default::default()
     };
 
@@ -171,28 +192,90 @@ async fn handle_check(
         })
         .collect();
 
-    match driver.check(&sources) {
-        Ok(sink) => (
+    let check_res = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || driver.check(&sources)),
+    )
+    .await;
+
+    match check_res {
+        Ok(Ok(Ok(sink))) => (
             StatusCode::OK,
             Json(DaemonCheckResponse {
                 status: "SUCCESS".to_string(),
                 diagnostics: sink.into_diagnostics(),
             }),
         ),
-        Err(sink) => (
+        Ok(Ok(Err(sink))) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(DaemonCheckResponse {
                 status: "FAILED".to_string(),
                 diagnostics: sink.into_diagnostics(),
             }),
         ),
+        Ok(Err(join_err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(DaemonCheckResponse {
+                status: "FAILED".to_string(),
+                diagnostics: vec![Diagnostic::error(
+                    "E0002",
+                    format!("Internal worker thread join error: {}", join_err),
+                    wasmc_diagnostics::SourceSpan::empty(),
+                )],
+            }),
+        ),
+        Err(_) => (
+            StatusCode::REQUEST_TIMEOUT,
+            Json(DaemonCheckResponse {
+                status: "TIMEOUT".to_string(),
+                diagnostics: vec![Diagnostic::error(
+                    "E0003",
+                    "Compilation check timed out after 10 seconds",
+                    wasmc_diagnostics::SourceSpan::empty(),
+                )],
+            }),
+        ),
     }
 }
 
 async fn handle_compile(
+    State(state): State<Arc<AppState>>,
     Json(payload): Json<DaemonCompileRequest>,
 ) -> impl IntoResponse {
-    let session_id = blake3::hash(format!("{}:{}", payload.project_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()).as_bytes()).to_hex().to_string();
+    let total_source_bytes: usize = payload.sources.iter().map(|s| s.content_utf8.len()).sum();
+    if total_source_bytes > 1024 * 1024 {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(DaemonCompileResponse {
+                status: "FAILED".to_string(),
+                session_id: "error".to_string(),
+                duration_ms: 0,
+                cache_hit: false,
+                artifacts: None,
+                diagnostics: vec![Diagnostic::error(
+                    "E0001",
+                    "Source payload exceeds 1 MB limit",
+                    wasmc_diagnostics::SourceSpan::empty(),
+                )],
+            }),
+        );
+    }
+
+    let session_id = blake3::hash(
+        format!(
+            "{}:{}",
+            payload.project_id,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        )
+        .as_bytes(),
+    )
+    .to_hex()
+    .to_string();
+
+    let cache_dir = state.cache.as_ref().map(|c| c.cache_dir().to_path_buf());
 
     let options = CompilerOptions {
         target: payload.target,
@@ -202,6 +285,7 @@ async fn handle_compile(
         emit_stack_check: payload.memory_config.emit_stack_overflow_check,
         bundle_allocator: payload.memory_config.bundle_default_allocator,
         emit_wat: true,
+        cache_dir,
         ..Default::default()
     };
 
@@ -215,8 +299,15 @@ async fn handle_compile(
         })
         .collect();
 
-    match driver.compile(&sources) {
-        Ok(artifacts) => {
+    let session_id_clone = session_id.clone();
+    let compile_res = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || driver.compile(&sources)),
+    )
+    .await;
+
+    match compile_res {
+        Ok(Ok(Ok(artifacts))) => {
             // Encode binary to base64 manually without third-party base64 crate
             const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
             let mut b64 = String::new();
@@ -262,10 +353,10 @@ async fn handle_compile(
 
             (StatusCode::OK, Json(resp))
         }
-        Err(sink) => {
+        Ok(Ok(Err(sink))) => {
             let resp = DaemonCompileResponse {
                 status: "FAILED".to_string(),
-                session_id,
+                session_id: session_id_clone,
                 duration_ms: 0,
                 cache_hit: false,
                 artifacts: None,
@@ -273,5 +364,106 @@ async fn handle_compile(
             };
             (StatusCode::UNPROCESSABLE_ENTITY, Json(resp))
         }
+        Ok(Err(join_err)) => {
+            let resp = DaemonCompileResponse {
+                status: "FAILED".to_string(),
+                session_id: session_id_clone,
+                duration_ms: 0,
+                cache_hit: false,
+                artifacts: None,
+                diagnostics: vec![Diagnostic::error(
+                    "E0002",
+                    format!("Internal worker thread join error: {}", join_err),
+                    wasmc_diagnostics::SourceSpan::empty(),
+                )],
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(resp))
+        }
+        Err(_) => {
+            let resp = DaemonCompileResponse {
+                status: "TIMEOUT".to_string(),
+                session_id: session_id_clone,
+                duration_ms: 0,
+                cache_hit: false,
+                artifacts: None,
+                diagnostics: vec![Diagnostic::error(
+                    "E0003",
+                    "Compilation timed out after 10 seconds",
+                    wasmc_diagnostics::SourceSpan::empty(),
+                )],
+            };
+            (StatusCode::REQUEST_TIMEOUT, Json(resp))
+        }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_daemon_health() {
+        let resp = handle_health().await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_compile_payload_too_large() {
+        let state = Arc::new(AppState { cache: None });
+        let large_content = "x".repeat(1024 * 1024 + 10);
+        let req = DaemonCompileRequest {
+            project_id: "test".to_string(),
+            target: default_target(),
+            opt_level: default_opt_level(),
+            debug: false,
+            memory_config: DaemonMemoryConfig::default(),
+            sources: vec![DaemonCompileSource {
+                path: "overflow.src".to_string(),
+                content_utf8: large_content,
+            }],
+        };
+
+        let resp = handle_compile(State(state), Json(req)).await.into_response();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_check_payload_too_large() {
+        let state = Arc::new(AppState { cache: None });
+        let large_content = "x".repeat(1024 * 1024 + 10);
+        let req = DaemonCompileRequest {
+            project_id: "test".to_string(),
+            target: default_target(),
+            opt_level: default_opt_level(),
+            debug: false,
+            memory_config: DaemonMemoryConfig::default(),
+            sources: vec![DaemonCompileSource {
+                path: "overflow.src".to_string(),
+                content_utf8: large_content,
+            }],
+        };
+
+        let resp = handle_check(State(state), Json(req)).await.into_response();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_compile_valid_source() {
+        let state = Arc::new(AppState { cache: None });
+        let req = DaemonCompileRequest {
+            project_id: "test".to_string(),
+            target: default_target(),
+            opt_level: default_opt_level(),
+            debug: false,
+            memory_config: DaemonMemoryConfig::default(),
+            sources: vec![DaemonCompileSource {
+                path: "add.src".to_string(),
+                content_utf8: "export fn add(a: i32, b: i32) -> i32 { return a + b; }".to_string(),
+            }],
+        };
+
+        let resp = handle_compile(State(state), Json(req)).await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+}
+

@@ -13,7 +13,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 
-const WASMC_BIN = path.resolve('C:/Users/scan/AppData/Local/Temp/wasmc_target/debug/wasmc.exe');
+const userProfile = process.env.USERPROFILE || 'C:\\Users\\ASUS';
+const localAppData = process.env.LOCALAPPDATA || path.join(userProfile, 'AppData', 'Local');
+const mingwBin = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages', 'MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe', 'llvm-mingw-20260908-ucrt-x86_64', 'bin');
+const cargoBin = path.join(userProfile, '.cargo', 'bin');
+
+const defaultTargetBin = path.resolve(path.join(process.cwd(), 'target', 'debug', 'wasmc.exe'));
+const tempTargetBin = path.resolve(userProfile, 'AppData/Local/Temp/wasmc_target/debug/wasmc.exe');
+const WASMC_BIN = process.env.WASMC_BIN || (fs.existsSync(defaultTargetBin) ? defaultTargetBin : tempTargetBin);
 let totalTests = 0;
 let passedTests = 0;
 
@@ -28,7 +35,7 @@ function assert(condition, message) {
 }
 
 async function runCommand(cmd) {
-  return execSync(cmd, { encoding: 'utf-8', env: { ...process.env, PATH: `C:\\Users\\scan\\.cargo\\bin;C:\\Users\\scan\\AppData\\Local\\Microsoft\\WinGet\\Packages\\MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\\llvm-mingw-20260908-ucrt-x86_64\\bin;${process.env.PATH}` } });
+  return execSync(cmd, { encoding: 'utf-8', env: { ...process.env, PATH: `${cargoBin};${mingwBin};${process.env.PATH}` } });
 }
 
 async function httpRequest(options, data) {
@@ -182,7 +189,18 @@ async function main() {
     const { instance: daemonInst } = await WebAssembly.instantiate(daemonWasmBytes);
     assert(daemonInst.exports.remote_mult(6, 7) === 42, 'Daemon compiled module: remote_mult(6, 7) == 42');
 
-    // 5.3 Cache Status Endpoint
+    // 5.3 Check Endpoint
+    const checkRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: daemonPort,
+      path: '/api/v1/check',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }, compilePayload);
+    assert(checkRes.statusCode === 200, 'POST /api/v1/check returns HTTP 200');
+    assert(checkRes.body.status === 'SUCCESS', 'POST /api/v1/check status is SUCCESS');
+
+    // 5.4 Cache Status Endpoint
     const cacheStatus = await httpRequest({
       hostname: '127.0.0.1',
       port: daemonPort,

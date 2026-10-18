@@ -27,14 +27,24 @@ impl CompilationCache {
 
     fn open(&self) -> Result<Connection> {
         let conn = Connection::open(&self.db_path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
             PRAGMA foreign_keys = ON;
+            PRAGMA busy_timeout = 5000;
             "#,
         )?;
         Ok(conn)
+    }
+
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    pub fn cache_dir(&self) -> &Path {
+        self.db_path.parent().unwrap_or_else(|| Path::new("."))
     }
 
     fn init_schema(&self) -> Result<()> {
@@ -89,13 +99,40 @@ impl CompilationCache {
         Ok(())
     }
 
+    pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
     pub fn compute_source_hash(source_utf8: &str) -> String {
         blake3::hash(source_utf8.as_bytes()).to_hex().to_string()
     }
 
     pub fn compute_flags_hash(target: &str, opt_level: &str, debug: bool, stack_size: u32) -> String {
-        let s = format!("{}:{}:{}:{}", target, opt_level, debug, stack_size);
-        blake3::hash(s.as_bytes()).to_hex().to_string()
+        Self::compute_flags_hash_extended(target, opt_level, debug, stack_size, true, true)
+    }
+
+    pub fn compute_flags_hash_extended(
+        target: &str,
+        opt_level: &str,
+        debug: bool,
+        stack_size: u32,
+        emit_stack_check: bool,
+        bundle_allocator: bool,
+    ) -> String {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"wasmc_v:");
+        hasher.update(Self::COMPILER_VERSION.as_bytes());
+        hasher.update(b"|target:");
+        hasher.update(target.as_bytes());
+        hasher.update(b"|opt:");
+        hasher.update(opt_level.as_bytes());
+        hasher.update(b"|debug:");
+        hasher.update(if debug { b"1" } else { b"0" });
+        hasher.update(b"|stack:");
+        hasher.update(&stack_size.to_le_bytes());
+        hasher.update(b"|stack_chk:");
+        hasher.update(if emit_stack_check { b"1" } else { b"0" });
+        hasher.update(b"|bundle_alloc:");
+        hasher.update(if bundle_allocator { b"1" } else { b"0" });
+        hasher.finalize().to_hex().to_string()
     }
 
     pub fn lookup_unit(
@@ -191,3 +228,61 @@ impl CompilationCache {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_flags_hash_sensitivity() {
+        let h1 = CompilationCache::compute_flags_hash_extended("wasm32-unknown-web", "O2", false, 1048576, true, true);
+        let h2 = CompilationCache::compute_flags_hash_extended("wasm32-unknown-web", "O0", false, 1048576, true, true);
+        let h3 = CompilationCache::compute_flags_hash_extended("wasm32-wasi", "O2", false, 1048576, true, true);
+        let h4 = CompilationCache::compute_flags_hash_extended("wasm32-unknown-web", "O2", true, 1048576, true, true);
+        let h5 = CompilationCache::compute_flags_hash_extended("wasm32-unknown-web", "O2", false, 65536, true, true);
+        let h6 = CompilationCache::compute_flags_hash_extended("wasm32-unknown-web", "O2", false, 1048576, false, true);
+        let h7 = CompilationCache::compute_flags_hash_extended("wasm32-unknown-web", "O2", false, 1048576, true, false);
+
+        assert_ne!(h1, h2, "opt_level change must invalidate hash");
+        assert_ne!(h1, h3, "target change must invalidate hash");
+        assert_ne!(h1, h4, "debug mode change must invalidate hash");
+        assert_ne!(h1, h5, "stack size change must invalidate hash");
+        assert_ne!(h1, h6, "emit_stack_check change must invalidate hash");
+        assert_ne!(h1, h7, "bundle_allocator change must invalidate hash");
+    }
+
+    #[test]
+    fn test_sqlite_cache_lifecycle_and_wal_timeout() {
+        let temp_dir = std::env::temp_dir().join(format!("wasmc_cache_unit_{}", std::process::id()));
+        let cache = CompilationCache::new(&temp_dir).expect("init cache");
+
+        let file = "main.src";
+        let src_hash = CompilationCache::compute_source_hash("fn main() {}");
+        let flags_hash = CompilationCache::compute_flags_hash("wasm32-unknown-web", "O2", false, 1048576);
+        let wasm_blob = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+
+        // Miss before store
+        let miss = cache.lookup_unit(file, &src_hash, &flags_hash).unwrap();
+        assert!(miss.is_none());
+
+        // Store
+        cache.store_unit(file, &src_hash, &flags_hash, &wasm_blob).unwrap();
+
+        // Hit
+        let hit = cache.lookup_unit(file, &src_hash, &flags_hash).unwrap();
+        assert_eq!(hit, Some(wasm_blob.clone()));
+
+        // Invalidation when flags hash changes (e.g., version or opt level)
+        let other_flags = CompilationCache::compute_flags_hash("wasm32-unknown-web", "O0", false, 1048576);
+        let invalid = cache.lookup_unit(file, &src_hash, &other_flags).unwrap();
+        assert!(invalid.is_none());
+
+        // Status
+        let status = cache.get_status().unwrap();
+        assert_eq!(status.total_units, 1);
+        assert!(status.db_size_bytes > 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}
+

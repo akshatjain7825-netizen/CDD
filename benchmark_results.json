@@ -1,0 +1,27 @@
+{
+  "sorting.src": {
+    "wasmBytes": 2635,
+    "instCount": 590,
+    "avgTimeMs": "51.99"
+  },
+  "arithmetic.src": {
+    "wasmBytes": 204,
+    "instCount": 19,
+    "avgTimeMs": "37.08"
+  },
+  "control_flow.src": {
+    "wasmBytes": 298,
+    "instCount": 49,
+    "avgTimeMs": "39.97"
+  },
+  "functions.src": {
+    "wasmBytes": 194,
+    "instCount": 24,
+    "avgTimeMs": "58.04"
+  },
+  "memory.src": {
+    "wasmBytes": 139,
+    "instCount": 16,
+    "avgTimeMs": "35.91"
+  }
+}

@@ -46,8 +46,6 @@
     i32.add
     local.tee 9
     local.set 3
-    local.get 4
-    local.set 4
     local.get 7
     local.set 6
     br 0
@@ -117,6 +115,7 @@
     local.get 10
     local.set 17
     local.get 9
+    i32.eqz
     br_if 1
     end
     i32.const 1

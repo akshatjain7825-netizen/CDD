@@ -188,12 +188,20 @@ impl AstPool {
         &self.nodes[idx.0 as usize]
     }
 
+    pub fn try_get(&self, idx: NodeIndex) -> Option<&AstNode> {
+        self.nodes.get(idx.0 as usize)
+    }
+
     pub fn get_mut(&mut self, idx: NodeIndex) -> &mut AstNode {
         &mut self.nodes[idx.0 as usize]
     }
 
     pub fn span(&self, idx: NodeIndex) -> SourceSpan {
         self.spans[idx.0 as usize]
+    }
+
+    pub fn try_span(&self, idx: NodeIndex) -> Option<SourceSpan> {
+        self.spans.get(idx.0 as usize).copied()
     }
 
     pub fn len(&self) -> usize {

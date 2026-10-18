@@ -44,9 +44,19 @@ impl<'a> CodeGenerator<'a> {
     pub fn compile_function(
         &self,
         func: &StructuredFunction,
-        _sink: &mut DiagnosticSink,
+        sink: &mut DiagnosticSink,
     ) -> CompiledFunction {
-        let type_index = self.func_type_indices.get(&func.name).copied().unwrap_or(0);
+        let type_index = match self.func_type_indices.get(&func.name).copied() {
+            Some(idx) => idx,
+            None => {
+                sink.push(wasmc_diagnostics::Diagnostic::error(
+                    "E5001",
+                    format!("Missing function type index for function ID {:?}", func.name),
+                    wasmc_diagnostics::SourceSpan::empty(),
+                ));
+                0
+            }
+        };
 
         // Assign Wasm local indices to SSA virtual registers
         let mut vreg_to_local: HashMap<VReg, u32> = HashMap::new();
@@ -79,7 +89,18 @@ impl<'a> CodeGenerator<'a> {
             .filter(|(vr, _)| !vreg_to_local.contains_key(vr))
             .map(|(&vr, &ty)| (vr, ty))
             .collect();
-        internal_vregs.sort_by_key(|(vr, _)| vr.0);
+        // Sort by type first so locals match the declaration order (i32, then i64, f32, f64),
+        // breaking ties by VReg ID for determinism.
+        internal_vregs.sort_by_key(|(vr, ty)| {
+            let type_order = match ty {
+                MirType::I32 => 0,
+                MirType::I64 => 1,
+                MirType::F32 => 2,
+                MirType::F64 => 3,
+                MirType::Void => 4,
+            };
+            (type_order, vr.0)
+        });
 
         for (vr, ty) in internal_vregs {
             vreg_to_local.insert(vr, local_idx);
@@ -114,20 +135,21 @@ impl<'a> CodeGenerator<'a> {
 
         // Function Prologue (Section 4.4, ADR-006): Shadow Stack allocation & Overflow check
         if func.frame_size > 0 {
-            let fp = fp_local.unwrap();
-            opcodes.push(WasmOpcode::GlobalGet(self.stack_pointer_global));
-            opcodes.push(WasmOpcode::I32Const(func.frame_size as i32));
-            opcodes.push(WasmOpcode::I32Sub);
-            opcodes.push(WasmOpcode::LocalTee(fp));
-            opcodes.push(WasmOpcode::GlobalSet(self.stack_pointer_global));
+            if let Some(fp) = fp_local {
+                opcodes.push(WasmOpcode::GlobalGet(self.stack_pointer_global));
+                opcodes.push(WasmOpcode::I32Const(func.frame_size as i32));
+                opcodes.push(WasmOpcode::I32Sub);
+                opcodes.push(WasmOpcode::LocalTee(fp));
+                opcodes.push(WasmOpcode::GlobalSet(self.stack_pointer_global));
 
-            if self.emit_stack_check {
-                opcodes.push(WasmOpcode::LocalGet(fp));
-                opcodes.push(WasmOpcode::I32Const(self.data_end_offset as i32));
-                opcodes.push(WasmOpcode::I32LtU);
-                opcodes.push(WasmOpcode::If(BlockType::Empty));
-                opcodes.push(WasmOpcode::Unreachable);
-                opcodes.push(WasmOpcode::End);
+                if self.emit_stack_check {
+                    opcodes.push(WasmOpcode::LocalGet(fp));
+                    opcodes.push(WasmOpcode::I32Const(self.data_end_offset as i32));
+                    opcodes.push(WasmOpcode::I32LtU);
+                    opcodes.push(WasmOpcode::If(BlockType::Empty));
+                    opcodes.push(WasmOpcode::Unreachable);
+                    opcodes.push(WasmOpcode::End);
+                }
             }
         }
 
@@ -143,17 +165,24 @@ impl<'a> CodeGenerator<'a> {
                     opcodes.push(WasmOpcode::LocalGet(loc));
                     opcodes.push(WasmOpcode::BrIf(*depth));
                 }
+                StructuredInst::BrIfEqz(depth, cond) => {
+                    let loc = vreg_to_local[cond];
+                    opcodes.push(WasmOpcode::LocalGet(loc));
+                    opcodes.push(WasmOpcode::I32Eqz);
+                    opcodes.push(WasmOpcode::BrIf(*depth));
+                }
                 StructuredInst::Mir(mir) => {
-                    self.lower_mir_inst(mir, &vreg_to_local, fp_local, &mut opcodes);
+                    self.lower_mir_inst(mir, &vreg_to_local, fp_local, sink, &mut opcodes);
                 }
                 StructuredInst::Return(ret_val) => {
                     // Function Epilogue: Restore shadow stack pointer
                     if func.frame_size > 0 {
-                        let fp = fp_local.unwrap();
-                        opcodes.push(WasmOpcode::LocalGet(fp));
-                        opcodes.push(WasmOpcode::I32Const(func.frame_size as i32));
-                        opcodes.push(WasmOpcode::I32Add);
-                        opcodes.push(WasmOpcode::GlobalSet(self.stack_pointer_global));
+                        if let Some(fp) = fp_local {
+                            opcodes.push(WasmOpcode::LocalGet(fp));
+                            opcodes.push(WasmOpcode::I32Const(func.frame_size as i32));
+                            opcodes.push(WasmOpcode::I32Add);
+                            opcodes.push(WasmOpcode::GlobalSet(self.stack_pointer_global));
+                        }
                     }
                     if let Some(vr) = ret_val {
                         let loc = vreg_to_local[vr];
@@ -163,20 +192,39 @@ impl<'a> CodeGenerator<'a> {
                 }
                 StructuredInst::TailCall { func_name, args } => {
                     if func.frame_size > 0 {
-                        let fp = fp_local.unwrap();
-                        opcodes.push(WasmOpcode::LocalGet(fp));
-                        opcodes.push(WasmOpcode::I32Const(func.frame_size as i32));
-                        opcodes.push(WasmOpcode::I32Add);
-                        opcodes.push(WasmOpcode::GlobalSet(self.stack_pointer_global));
+                        if let Some(fp) = fp_local {
+                            opcodes.push(WasmOpcode::LocalGet(fp));
+                            opcodes.push(WasmOpcode::I32Const(func.frame_size as i32));
+                            opcodes.push(WasmOpcode::I32Add);
+                            opcodes.push(WasmOpcode::GlobalSet(self.stack_pointer_global));
+                        }
                     }
                     for a in args {
                         let loc = vreg_to_local[a];
                         opcodes.push(WasmOpcode::LocalGet(loc));
                     }
-                    let f_idx = self.func_indices.get(func_name).copied().unwrap_or(0);
+                    let f_idx = match self.func_indices.get(func_name).copied() {
+                        Some(idx) => idx,
+                        None => {
+                            sink.push(wasmc_diagnostics::Diagnostic::error(
+                                "E5002",
+                                format!("Missing function index for tail call to ID {:?}", func_name),
+                                wasmc_diagnostics::SourceSpan::empty(),
+                            ));
+                            0
+                        }
+                    };
                     opcodes.push(WasmOpcode::ReturnCall(f_idx));
                 }
                 StructuredInst::Throw(vr) => {
+                    if func.frame_size > 0 {
+                        if let Some(fp) = fp_local {
+                            opcodes.push(WasmOpcode::LocalGet(fp));
+                            opcodes.push(WasmOpcode::I32Const(func.frame_size as i32));
+                            opcodes.push(WasmOpcode::I32Add);
+                            opcodes.push(WasmOpcode::GlobalSet(self.stack_pointer_global));
+                        }
+                    }
                     let loc = vreg_to_local[vr];
                     opcodes.push(WasmOpcode::LocalGet(loc));
                     opcodes.push(WasmOpcode::Throw(0));
@@ -185,17 +233,23 @@ impl<'a> CodeGenerator<'a> {
             }
         }
 
-        // Implicit epilogue if function flows to the end
-        if func.frame_size > 0 {
-            let fp = fp_local.unwrap();
-            opcodes.push(WasmOpcode::LocalGet(fp));
-            opcodes.push(WasmOpcode::I32Const(func.frame_size as i32));
-            opcodes.push(WasmOpcode::I32Add);
-            opcodes.push(WasmOpcode::GlobalSet(self.stack_pointer_global));
-        }
+        // Implicit epilogue only if function flows to the end without prior termination
+        let has_terminated = matches!(
+            opcodes.last(),
+            Some(WasmOpcode::Return) | Some(WasmOpcode::Unreachable) | Some(WasmOpcode::ReturnCall(_))
+        );
 
-        if func.return_type != MirType::Void {
-            if opcodes.last() != Some(&WasmOpcode::Return) && opcodes.last() != Some(&WasmOpcode::Unreachable) {
+        if !has_terminated {
+            if func.frame_size > 0 {
+                if let Some(fp) = fp_local {
+                    opcodes.push(WasmOpcode::LocalGet(fp));
+                    opcodes.push(WasmOpcode::I32Const(func.frame_size as i32));
+                    opcodes.push(WasmOpcode::I32Add);
+                    opcodes.push(WasmOpcode::GlobalSet(self.stack_pointer_global));
+                }
+            }
+
+            if func.return_type != MirType::Void {
                 opcodes.push(WasmOpcode::Unreachable);
             }
         }
@@ -218,6 +272,7 @@ impl<'a> CodeGenerator<'a> {
         mir: &MirInst,
         vreg_map: &HashMap<VReg, u32>,
         fp_local: Option<u32>,
+        sink: &mut DiagnosticSink,
         out: &mut Vec<WasmOpcode>,
     ) {
         match mir {
@@ -338,8 +393,10 @@ impl<'a> CodeGenerator<'a> {
                 let d_loc = vreg_map[dest];
                 if let Some(fp) = fp_local {
                     out.push(WasmOpcode::LocalGet(fp));
-                    out.push(WasmOpcode::I32Const(*frame_offset));
-                    out.push(WasmOpcode::I32Add);
+                    if *frame_offset != 0 {
+                        out.push(WasmOpcode::I32Const(*frame_offset));
+                        out.push(WasmOpcode::I32Add);
+                    }
                     out.push(WasmOpcode::LocalSet(d_loc));
                 } else {
                     out.push(WasmOpcode::I32Const(*frame_offset));
@@ -351,7 +408,17 @@ impl<'a> CodeGenerator<'a> {
                     let loc = vreg_map[a];
                     out.push(WasmOpcode::LocalGet(loc));
                 }
-                let f_idx = self.func_indices.get(func_name).copied().unwrap_or(0);
+                let f_idx = match self.func_indices.get(func_name).copied() {
+                    Some(idx) => idx,
+                    None => {
+                        sink.push(wasmc_diagnostics::Diagnostic::error(
+                            "E5002",
+                            format!("Missing function index for call to ID {:?}", func_name),
+                            wasmc_diagnostics::SourceSpan::empty(),
+                        ));
+                        0
+                    }
+                };
                 out.push(WasmOpcode::Call(f_idx));
                 if let Some(d) = dest {
                     let d_loc = vreg_map[d];
@@ -393,22 +460,64 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    fn peephole_optimize(opcodes: Vec<WasmOpcode>) -> Vec<WasmOpcode> {
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < opcodes.len() {
-            if i + 1 < opcodes.len() {
-                if let (WasmOpcode::LocalSet(a), WasmOpcode::LocalGet(b)) = (&opcodes[i], &opcodes[i + 1]) {
-                    if a == b {
-                        out.push(WasmOpcode::LocalTee(*a));
+    fn peephole_optimize(mut opcodes: Vec<WasmOpcode>) -> Vec<WasmOpcode> {
+        for _ in 0..4 {
+            let mut out = Vec::new();
+            let mut i = 0;
+            let mut changed = false;
+
+            while i < opcodes.len() {
+                // Pattern 1: LocalSet(a) + LocalGet(b) where a == b -> LocalTee(a)
+                if i + 1 < opcodes.len() {
+                    if let (WasmOpcode::LocalSet(a), WasmOpcode::LocalGet(b)) = (&opcodes[i], &opcodes[i + 1]) {
+                        if a == b {
+                            out.push(WasmOpcode::LocalTee(*a));
+                            i += 2;
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
+
+                // Pattern 2: I32Const(0) + I32Add -> no-op (x + 0 == x)
+                if i + 1 < opcodes.len() {
+                    if let (WasmOpcode::I32Const(0), WasmOpcode::I32Add) = (&opcodes[i], &opcodes[i + 1]) {
                         i += 2;
+                        changed = true;
                         continue;
                     }
                 }
+
+                // Pattern 3: I32Const(1) + I32Mul -> no-op (x * 1 == x)
+                if i + 1 < opcodes.len() {
+                    if let (WasmOpcode::I32Const(1), WasmOpcode::I32Mul) = (&opcodes[i], &opcodes[i + 1]) {
+                        i += 2;
+                        changed = true;
+                        continue;
+                    }
+                }
+
+                // Pattern 4: LocalGet(a) + LocalSet(b) where a == b -> no-op
+                if i + 1 < opcodes.len() {
+                    if let (WasmOpcode::LocalGet(a), WasmOpcode::LocalSet(b)) = (&opcodes[i], &opcodes[i + 1]) {
+                        if a == b {
+                            i += 2;
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
+
+                out.push(opcodes[i].clone());
+                i += 1;
             }
-            out.push(opcodes[i].clone());
-            i += 1;
+
+            opcodes = out;
+            if !changed {
+                break;
+            }
         }
-        out
+
+        opcodes
     }
 }

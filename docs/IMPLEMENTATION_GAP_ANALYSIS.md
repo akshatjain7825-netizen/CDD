@@ -1,16 +1,26 @@
 # Implementation Gap Analysis: Direct-to-WebAssembly Compiler (`wasmc`)
 
+> **Living Docs Role: Live Status**
+> Governed under ECC `living-docs-governance`. This document tracks reconciled architectural gaps, implementation resolutions, and drift mitigation against the active Rust workspace.
+
 ## Document Metadata
 - **Project:** Direct-to-WebAssembly Systems Compiler (`wasmc`)
-- **Date:** October 15, 2026
-- **Status:** Approved Baseline
-- **Governing Precedence:** SDD > SRS > FRD > HLD > LLD
+- **Date:** October 18, 2026
+- **Status:** Reconciled & Verified
+- **Governing Precedence:** Constitution (`docs/specs/sdd.md` > `docs/specs/srs.md` > `docs/specs/frd.md` > `docs/specs/hld.md` > `docs/specs/lld.md`)
 
 ---
 
 ## 1. Executive Summary
 
-This gap analysis reviews the five authoritative project specifications (`direct_to_wasm_compiler_srs.md`, `direct_to_wasm_compiler_sdd.md`, `direct_to_wasm_compiler_lld.md`, `direct_to_wasm_compiler_hld.md`, and `direct_to_wasm_compiler_frd.md`). It identifies textual contradictions, incomplete specifications, scope boundary variances, and technology requirements, establishing concrete engineering resolutions before workspace implementation begins.
+This gap analysis reviews the five authoritative project specifications in [`docs/specs/`](specs/):
+- [`srs.md`](specs/srs.md) — Software Requirements Specification
+- [`sdd.md`](specs/sdd.md) — Software Design Document
+- [`lld.md`](specs/lld.md) — Low-Level Design
+- [`hld.md`](specs/hld.md) — High-Level Design
+- [`frd.md`](specs/frd.md) — Functional Requirements Document
+
+It reconciles textual discrepancies, incomplete specifications, scope boundary variances, error code structures (`E1001`–`E5002`), storage classes, and REST daemon routes against the 16 active crates in `CDD/crates/`.
 
 ---
 

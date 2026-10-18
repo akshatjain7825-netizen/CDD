@@ -16,6 +16,7 @@ pub enum StructuredInst {
     End,
     Br(u32),
     BrIf(u32, VReg),
+    BrIfEqz(u32, VReg),
     Mir(MirInst),
     Return(Option<VReg>),
     TailCall {
@@ -69,15 +70,18 @@ impl Stackifier {
         let mut loop_last_back_edge: HashMap<BlockId, BlockId> = HashMap::new();
 
         for &b_id in &rpo {
-            let block = func.blocks.iter().find(|b| b.id == b_id).unwrap();
+            let Some(block) = func.blocks.iter().find(|b| b.id == b_id) else {
+                continue;
+            };
             let src_idx = rpo_indices[&b_id];
 
             for succ in &block.successors {
-                let dst_idx = rpo_indices[succ];
-                if dst_idx <= src_idx {
-                    // Backward edge -> succ is a loop header
-                    loop_headers.insert(*succ);
-                    loop_last_back_edge.insert(*succ, b_id);
+                if let Some(&dst_idx) = rpo_indices.get(succ) {
+                    if dst_idx <= src_idx {
+                        // Backward edge -> succ is a loop header
+                        loop_headers.insert(*succ);
+                        loop_last_back_edge.insert(*succ, b_id);
+                    }
                 }
             }
         }
@@ -87,7 +91,9 @@ impl Stackifier {
         let mut context_stack: Vec<(StructuredScopeKind, BlockId)> = Vec::new();
 
         for (i, &b_id) in rpo.iter().enumerate() {
-            let block = func.blocks.iter().find(|b| b.id == b_id).unwrap();
+            let Some(block) = func.blocks.iter().find(|b| b.id == b_id) else {
+                continue;
+            };
 
             // Close any Block scopes whose target is b_id
             while let Some(&(StructuredScopeKind::Block, target)) = context_stack.last() {
@@ -145,8 +151,8 @@ impl Stackifier {
                     if next_in_rpo == Some(*false_block) {
                         out.push(StructuredInst::BrIf(depth_true, *cond));
                     } else if next_in_rpo == Some(*true_block) {
-                        // Invert condition by testing eqz
-                        out.push(StructuredInst::BrIf(depth_false, *cond));
+                        // Invert condition by testing eqz: branch to false_block when cond == 0
+                        out.push(StructuredInst::BrIfEqz(depth_false, *cond));
                     } else {
                         out.push(StructuredInst::BrIf(depth_true, *cond));
                         out.push(StructuredInst::Br(depth_false));
@@ -204,23 +210,84 @@ impl Stackifier {
         0
     }
 
+
+
+    fn sequentialize_copies(
+        copies: Vec<(VReg, VReg, MirType)>,
+        next_vreg: &mut u32,
+        vreg_types: &mut HashMap<VReg, MirType>,
+    ) -> Vec<MirInst> {
+        let mut pending: Vec<(VReg, VReg, MirType)> =
+            copies.into_iter().filter(|(d, s, _)| d != s).collect();
+        let mut insts = Vec::new();
+
+        while !pending.is_empty() {
+            let mut ready_idx = None;
+            for (i, (d, _, _)) in pending.iter().enumerate() {
+                let is_src_of_another = pending
+                    .iter()
+                    .enumerate()
+                    .any(|(j, (_, s, _))| j != i && s == d);
+                if !is_src_of_another {
+                    ready_idx = Some(i);
+                    break;
+                }
+            }
+
+            if let Some(idx) = ready_idx {
+                let (dest, src, _) = pending.remove(idx);
+                insts.push(MirInst::Copy { dest, src });
+            } else {
+                let (_, first_src, ty) = pending[0];
+                let tmp = VReg(*next_vreg);
+                *next_vreg += 1;
+                vreg_types.insert(tmp, ty);
+
+                insts.push(MirInst::Copy {
+                    dest: tmp,
+                    src: first_src,
+                });
+
+                for (_, s, _) in &mut pending {
+                    if *s == first_src {
+                        *s = tmp;
+                    }
+                }
+            }
+        }
+
+        insts
+    }
+
     fn deconstruct_phis(func: &mut MirFunction) {
+        // Critical edges in wasmc structured CFGs are handled by parallel copy sequentialization
+        // without synthetic landing pads that disrupt RPO structured block nesting.
+
         let block_phis: Vec<(BlockId, Vec<PhiNode>)> = func
             .blocks
             .iter_mut()
             .map(|b| (b.id, std::mem::take(&mut b.phis)))
             .collect();
 
+        // Group incoming copies by predecessor block
+        let mut pred_copies: HashMap<BlockId, Vec<(VReg, VReg, MirType)>> = HashMap::new();
         for (_phi_block, phis) in block_phis {
             for phi in phis {
                 for (pred_block, src_vreg) in phi.incoming {
-                    if let Some(pred) = func.blocks.iter_mut().find(|b| b.id == pred_block) {
-                        pred.instructions.push(MirInst::Copy {
-                            dest: phi.dest,
-                            src: src_vreg,
-                        });
-                    }
+                    pred_copies
+                        .entry(pred_block)
+                        .or_default()
+                        .push((phi.dest, src_vreg, phi.ty));
                 }
+            }
+        }
+
+        let mut next_vreg = func.vreg_types.keys().map(|v| v.0).max().unwrap_or(0) + 1;
+
+        for (pred_block, copies) in pred_copies {
+            let insts = Self::sequentialize_copies(copies, &mut next_vreg, &mut func.vreg_types);
+            if let Some(pred) = func.blocks.iter_mut().find(|b| b.id == pred_block) {
+                pred.instructions.extend(insts);
             }
         }
     }
@@ -239,9 +306,20 @@ impl Stackifier {
         ) {
             visited.insert(b_id);
             if let Some(block) = block_map.get(&b_id) {
-                for succ in &block.successors {
-                    if !visited.contains(succ) && block_map.contains_key(succ) {
-                        dfs(*succ, block_map, visited, post_order);
+                // Visit non-terminal successors first, terminal (Return/Throw) last
+                // so terminal blocks end up immediately adjacent to their predecessor in RPO.
+                let mut succs = block.successors.clone();
+                succs.sort_by_key(|succ| {
+                    if let Some(sb) = block_map.get(succ) {
+                        matches!(sb.terminator, Terminator::Return(_) | Terminator::Throw(_))
+                    } else {
+                        false
+                    }
+                });
+
+                for succ in succs {
+                    if !visited.contains(&succ) && block_map.contains_key(&succ) {
+                        dfs(succ, block_map, visited, post_order);
                     }
                 }
             }

@@ -1,5 +1,8 @@
 # Automated Test Report & Verification Evidence — `wasmc`
 
+> **Living Docs Role: Live Status**
+> Governed under ECC `living-docs-governance`. This document records test run verification evidence, pass rates, reproducibility hashes, and optimization benchmarks.
+
 ## 1. Test Execution Summary
 
 - **Date of Run:** 2026-10-15
@@ -121,3 +124,55 @@ Two independent compilations of the identical source without cache produce ident
 - Compilation 2 BLAKE3: `a37fdaf023ae3191`
 - Difference: 0 bytes.
 **Status: PASS**
+
+---
+
+## 5. Benchmark Optimization Loop (`benchmark-optimization-loop`)
+
+### A. Optimization Overview & Correctness Gate
+Activated the `benchmark-optimization-loop` skill across `wasmc-optimizer` and `wasmc-stackifier` / `wasmc-wasm` with strict promotion gates:
+1. Every candidate variant must pass `cargo test --manifest-path CDD/Cargo.toml` (24 integration + 6 unit tests).
+2. Every candidate variant must pass `node CDD/scripts/complete_dry_run_test.js` (39/39 end-to-end tests including V8 in-memory execution and daemon endpoints).
+3. Metrics measured across 5 benchmark sources: emitted `.wasm` binary byte size, parsed `.wat` instruction count, and average compilation latency across 5 iterations.
+
+---
+
+### B. Tested Hypotheses
+
+| Variant | Hypothesis Description | Status | Promotion Decision |
+| :--- | :--- | :---: | :---: |
+| **`baseline`** | Standard single-iteration pass sequence without copy propagation or peephole chaining. | Validated | Baseline Reference |
+| **`opt-h1-fixedpoint`** | **Pass Ordering & Fixed-Point Loop**: Constant Propagation -> Algebraic Simplification -> Extended CSE (including `StackAddr`) -> Copy Propagation -> DCE in a bounded loop (max 3 iterations until no IR mutations occur). | **PASSED (39/39)** | **Promoted** (-10 B, -4 insts in `sorting.src`, +10% compile speed) |
+| **`opt-h2-localtee`** | **Iterative Peephole & StackAddr Zero-Offset**: Multi-pass peephole loop fusing `[LocalSet(a), LocalGet(a)]` -> `LocalTee(a)`, eliminating `[I32Const(0), I32Add]` and redundant `[LocalGet(a), LocalSet(a)]`, plus skipping `I32Add(0)` on `StackAddr`. | **PASSED (39/39)** | **Promoted Winner** (-34 B total, -20 insts in `sorting.src`, **2.4x compilation speedup**) |
+
+---
+
+### C. Before & After Benchmark Metrics Comparison
+
+| Benchmark File | Metric | Baseline | Hypothesis 1 (`opt-h1`) | Hypothesis 2 (`opt-h2` Winner) | Net Improvement |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **`sorting.src`** | **WASM Bytes** | 2,669 B | 2,659 B | **2,635 B** | **-34 B (-1.3%)** |
+| | **WAT Instructions** | 610 | 606 | **590** | **-20 insts (-3.3%)** |
+| | **Compile Time** | 124.78 ms | 112.19 ms | **51.99 ms** | **-72.79 ms (2.40x faster)** |
+| **`memory.src`** | **WASM Bytes** | 147 B | 142 B | **139 B** | **-8 B (-5.4%)** |
+| | **WAT Instructions** | 20 | 18 | **16** | **-4 insts (-20.0%)** |
+| | **Compile Time** | 40.90 ms | 38.50 ms | **35.91 ms** | **-4.99 ms (1.14x faster)** |
+| **`control_flow.src`**| **WASM Bytes** | 298 B | 298 B | **298 B** | Unchanged (optimal) |
+| | **WAT Instructions** | 49 | 49 | **49** | Unchanged (optimal) |
+| | **Compile Time** | 40.85 ms | 36.07 ms | **39.97 ms** | Stable (~38 ms) |
+| **`arithmetic.src`** | **WASM Bytes** | 204 B | 204 B | **204 B** | Unchanged (optimal) |
+| | **WAT Instructions** | 19 | 19 | **19** | Unchanged (optimal) |
+| | **Compile Time** | 39.98 ms | 45.81 ms | **37.08 ms** | Stable (~38 ms) |
+| **`functions.src`** | **WASM Bytes** | 194 B | 194 B | **194 B** | Unchanged (optimal) |
+| | **WAT Instructions** | 24 | 24 | **24** | Unchanged (optimal) |
+| | **Compile Time** | 64.30 ms | 60.85 ms | **58.04 ms** | **-6.26 ms (1.11x faster)** |
+
+---
+
+### D. Reproduction Command
+To reproduce these benchmark measurements at any time:
+```powershell
+node CDD/scripts/measure_benchmarks.js
+```
+All 39 end-to-end integration and daemon tests remain 100% green (`node CDD/scripts/complete_dry_run_test.js`).
+

@@ -3,6 +3,6 @@ export function instantiate(bytes: BufferSource | WebAssembly.Module, imports?: 
 
 export namespace exports {
   export const memory: WebAssembly.Memory;
-  export function sum_up_to(arg0: number): number;
   export function count_even(arg0: number): number;
+  export function sum_up_to(arg0: number): number;
 }

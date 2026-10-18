@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use wasmc_ast::*;
-use wasmc_diagnostics::{Diagnostic, DiagnosticSink};
+use wasmc_diagnostics::{Diagnostic, DiagnosticSink, SourceSpan};
 use wasmc_lexer::SymbolId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -198,7 +198,10 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn resolve_type_node(&self, idx: NodeIndex) -> SemType {
-        match self.pool.get(idx) {
+        let Some(node) = self.pool.try_get(idx) else {
+            return SemType::Poison;
+        };
+        match node {
             AstNode::TypePrimitive(p) => match p {
                 PrimType::Void => SemType::Void,
                 PrimType::Bool => SemType::Bool,
@@ -225,7 +228,15 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn collect_decl(&mut self, idx: NodeIndex) {
-        match self.pool.get(idx) {
+        let Some(node) = self.pool.try_get(idx) else {
+            self.sink.push(Diagnostic::error(
+                "E1001",
+                format!("Invalid AST node index {:?} during declaration collection", idx),
+                SourceSpan::empty(),
+            ));
+            return;
+        };
+        match node {
             AstNode::ExportDecl { decl } => self.collect_decl(*decl),
             AstNode::StructDecl { name, fields } => {
                 let mut def_fields = Vec::new();
@@ -329,7 +340,15 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn check_decl(&mut self, idx: NodeIndex) {
-        match self.pool.get(idx) {
+        let Some(node) = self.pool.try_get(idx) else {
+            self.sink.push(Diagnostic::error(
+                "E1001",
+                format!("Invalid AST node index {:?} during declaration analysis", idx),
+                SourceSpan::empty(),
+            ));
+            return;
+        };
+        match node {
             AstNode::ExportDecl { decl } => self.check_decl(*decl),
             AstNode::GlobalDecl {
                 type_node,
@@ -410,7 +429,15 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn check_stmt(&mut self, idx: NodeIndex, expected_ret: &SemType, locals: &mut Vec<SymbolEntry>) {
-        match self.pool.get(idx) {
+        let Some(node) = self.pool.try_get(idx) else {
+            self.sink.push(Diagnostic::error(
+                "E1001",
+                format!("Invalid AST node index {:?} during statement analysis", idx),
+                SourceSpan::empty(),
+            ));
+            return;
+        };
+        match node {
             AstNode::BlockStmt(stmts) => {
                 self.push_scope();
                 for &s in stmts {
@@ -542,7 +569,15 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn synthesize_expr(&mut self, idx: NodeIndex, locals: &mut [SymbolEntry]) -> SemType {
-        let ty = match self.pool.get(idx) {
+        let Some(node) = self.pool.try_get(idx) else {
+            self.sink.push(Diagnostic::error(
+                "E1001",
+                format!("Invalid AST node index {:?} during expression analysis", idx),
+                SourceSpan::empty(),
+            ));
+            return SemType::Poison;
+        };
+        let ty = match node {
             AstNode::LiteralExpr(lit) => match lit {
                 LiteralValue::Integer(_) => SemType::I32,
                 LiteralValue::Float(_) => SemType::F64,
@@ -748,11 +783,12 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn check_expr(&mut self, idx: NodeIndex, expected: &SemType, locals: &mut [SymbolEntry]) -> SemType {
         let synthesized = self.synthesize_expr(idx, locals);
-        if !expected.unifies_with(&synthesized) {
+        if synthesized != SemType::Poison && !expected.unifies_with(&synthesized) {
+            let span = self.pool.try_span(idx).unwrap_or_else(SourceSpan::empty);
             self.sink.push(Diagnostic::error(
                 "E3002",
                 format!("Expected type {:?}, got {:?}", expected, synthesized),
-                self.pool.span(idx),
+                span,
             ));
         }
         synthesized

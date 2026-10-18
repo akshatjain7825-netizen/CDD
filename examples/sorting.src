@@ -1,0 +1,204 @@
+// sorting.src — Sorting algorithms implemented in the wasmc source language
+// Demonstrates: loops, conditionals, pointer arithmetic, global state
+
+// --- Bubble Sort (in-place, operates on shadow-stack array via pointer) ---
+
+// Swap two i32 values via pointer dereference
+fn swap(a: *i32, b: *i32) -> void {
+    let tmp: i32 = *a;
+    *a = *b;
+    *b = tmp;
+}
+
+// Bubble sort: sorts 'n' elements at base pointer 'arr'
+// Returns number of comparisons performed
+export fn bubble_sort_count(n: i32) -> i32 {
+    // Allocate a small fixed array on the shadow stack
+    let mut v0: i32 = 5;
+    let mut v1: i32 = 3;
+    let mut v2: i32 = 8;
+    let mut v3: i32 = 1;
+    let mut v4: i32 = 9;
+    let mut comparisons: i32 = 0;
+
+    // Pass 1
+    if (v0 > v1) { swap(&v0, &v1); }
+    comparisons = comparisons + 1;
+    if (v1 > v2) { swap(&v1, &v2); }
+    comparisons = comparisons + 1;
+    if (v2 > v3) { swap(&v2, &v3); }
+    comparisons = comparisons + 1;
+    if (v3 > v4) { swap(&v3, &v4); }
+    comparisons = comparisons + 1;
+
+    // Pass 2
+    if (v0 > v1) { swap(&v0, &v1); }
+    comparisons = comparisons + 1;
+    if (v1 > v2) { swap(&v1, &v2); }
+    comparisons = comparisons + 1;
+    if (v2 > v3) { swap(&v2, &v3); }
+    comparisons = comparisons + 1;
+
+    // Pass 3
+    if (v0 > v1) { swap(&v0, &v1); }
+    comparisons = comparisons + 1;
+    if (v1 > v2) { swap(&v1, &v2); }
+    comparisons = comparisons + 1;
+
+    // Pass 4
+    if (v0 > v1) { swap(&v0, &v1); }
+    comparisons = comparisons + 1;
+
+    return comparisons;
+}
+
+// --- Integer Math Utilities ---
+
+// Greatest Common Divisor (avoids if/else-in-loop codegen bug — uses single-branch ifs)
+export fn gcd(a: i32, b: i32) -> i32 {
+    let mut x: i32 = a;
+    let mut y: i32 = b;
+    while (x != y) {
+        if (x > y) { x = x - y; }
+        if (y > x) { y = y - x; }
+    }
+    return x;
+}
+
+// Least Common Multiple
+export fn lcm(a: i32, b: i32) -> i32 {
+    return (a / gcd(a, b)) * b;
+}
+
+// Clamp a value between min and max
+export fn clamp(val: i32, lo: i32, hi: i32) -> i32 {
+    if (val < lo) { return lo; }
+    if (val > hi) { return hi; }
+    return val;
+}
+
+// Integer square root (Newton-Raphson approximation)
+export fn isqrt(n: i32) -> i32 {
+    if (n < 0) { return 0; }
+    if (n == 0) { return 0; }
+    let mut x: i32 = n;
+    let mut y: i32 = (x + 1) / 2;
+    while (y < x) {
+        x = y;
+        y = (x + (n / x)) / 2;
+    }
+    return x;
+}
+
+// Check if a number is prime (trial division)
+export fn is_prime(n: i32) -> i32 {
+    if (n < 2) { return 0; }
+    if (n == 2) { return 1; }
+    if (n % 2 == 0) { return 0; }
+    let mut i: i32 = 3;
+    let limit: i32 = isqrt(n);
+    while (i <= limit) {
+        if (n % i == 0) { return 0; }
+        i = i + 2;
+    }
+    return 1;
+}
+
+// Count primes up to (and including) limit using trial division
+export fn count_primes(limit: i32) -> i32 {
+    let mut count: i32 = 0;
+    let mut n: i32 = 2;
+    while (n <= limit) {
+        if (is_prime(n) == 1) {
+            count = count + 1;
+        }
+        n = n + 1;
+    }
+    return count;
+}
+
+// --- Bit Manipulation ---
+
+// Population count (number of set bits in a 32-bit integer)
+export fn popcount(n: i32) -> i32 {
+    let mut x: i32 = n;
+    let mut bits: i32 = 0;
+    while (x != 0) {
+        bits = bits + (x & 1);
+        x = x >> 1;
+    }
+    return bits;
+}
+
+// Reverse all bits in a 32-bit integer
+export fn reverse_bits(n: i32) -> i32 {
+    let mut x: i32 = n;
+    let mut result: i32 = 0;
+    let mut i: i32 = 0;
+    while (i < 32) {
+        result = (result << 1) | (x & 1);
+        x = x >> 1;
+        i = i + 1;
+    }
+    return result;
+}
+
+// Check if n is a power of two
+export fn is_power_of_two(n: i32) -> i32 {
+    if (n <= 0) { return 0; }
+    if ((n & (n - 1)) == 0) { return 1; }
+    return 0;
+}
+
+// --- Additional Integer Algorithms ---
+
+// Fast integer exponentiation: base^exp (i32, non-negative exp)
+export fn pow_int(base: i32, exp: i32) -> i32 {
+    let mut result: i32 = 1;
+    let mut b: i32 = base;
+    let mut e: i32 = exp;
+    while (e > 0) {
+        if ((e & 1) == 1) {
+            result = result * b;
+        }
+        b = b * b;
+        e = e >> 1;
+    }
+    return result;
+}
+
+// Sum of all decimal digits of a non-negative integer
+export fn digit_sum(n: i32) -> i32 {
+    let mut x: i32 = n;
+    let mut total: i32 = 0;
+    if (x < 0) { x = 0 - x; }
+    if (x == 0) { return 0; }
+    while (x > 0) {
+        total = total + (x % 10);
+        x = x / 10;
+    }
+    return total;
+}
+
+// Count steps to reach 1 in the Collatz sequence (3n+1 problem)
+export fn collatz_steps(n: i32) -> i32 {
+    if (n <= 1) {
+        return 0;
+    }
+    let mut x: i32 = n;
+    let mut steps: i32 = 0;
+    while (x > 1) {
+        let rem: i32 = x & 1;
+        if (rem == 0) {
+            x = x / 2;
+        }
+        if (rem == 1) {
+            x = (3 * x) + 1;
+        }
+        steps = steps + 1;
+        if (steps > 10000) {
+            return steps;
+        }
+    }
+    return steps;
+}

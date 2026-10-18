@@ -48,19 +48,24 @@ impl Optimizer {
     }
 
     pub fn optimize_function(&self, func: &mut MirFunction) {
-        // Run passes iteratively until convergence or fixed iteration limit
+        if self.level == OptLevel::O0 {
+            return;
+        }
+
+        // Bounded fixed-point loop (max 3 iterations until no IR mutations occur)
         let max_iters = match self.level {
             OptLevel::O0 => 0,
             OptLevel::O1 => 2,
-            OptLevel::O2 | OptLevel::Os => 4,
-            OptLevel::O3 | OptLevel::Oz => 6,
+            _ => 3,
         };
 
         for _ in 0..max_iters {
             let mut changed = false;
+            // Constant Propagation -> Algebraic Simplification -> CSE -> Copy Propagation -> DCE
             changed |= self.pass_constant_folding(func);
             changed |= self.pass_algebraic_simplification(func);
             changed |= self.pass_cse(func);
+            changed |= self.pass_copy_propagation(func);
             changed |= self.pass_dce(func);
             changed |= self.pass_prune_unreachable_blocks(func);
             if !changed {
@@ -91,6 +96,17 @@ impl Optimizer {
                     }
                     MirInst::ConstF64(dest, val) => {
                         const_f64.insert(*dest, *val);
+                    }
+                    MirInst::Copy { dest, src } => {
+                        if let Some(&val) = const_i32.get(src) {
+                            const_i32.insert(*dest, val);
+                        } else if let Some(&val) = const_i64.get(src) {
+                            const_i64.insert(*dest, val);
+                        } else if let Some(&val) = const_f32.get(src) {
+                            const_f32.insert(*dest, val);
+                        } else if let Some(&val) = const_f64.get(src) {
+                            const_f64.insert(*dest, val);
+                        }
                     }
                     _ => {}
                 }
@@ -207,17 +223,148 @@ impl Optimizer {
 
         for block in &mut func.blocks {
             let mut value_map: HashMap<(MirBinOp, VReg, VReg), VReg> = HashMap::new();
+            let mut stack_map: HashMap<i32, VReg> = HashMap::new();
 
             for inst in &mut block.instructions {
-                if let MirInst::Binary { dest, op, lhs, rhs } = inst {
-                    let key = (*op, *lhs, *rhs);
-                    if let Some(&prev_dest) = value_map.get(&key) {
-                        *inst = MirInst::Copy { dest: *dest, src: prev_dest };
-                        changed = true;
-                    } else {
-                        value_map.insert(key, *dest);
+                match inst {
+                    MirInst::Binary { dest, op, lhs, rhs } => {
+                        let key = (*op, *lhs, *rhs);
+                        if let Some(&prev_dest) = value_map.get(&key) {
+                            *inst = MirInst::Copy { dest: *dest, src: prev_dest };
+                            changed = true;
+                        } else {
+                            value_map.insert(key, *dest);
+                        }
+                    }
+                    MirInst::StackAddr { dest, frame_offset } => {
+                        if let Some(&prev_dest) = stack_map.get(frame_offset) {
+                            *inst = MirInst::Copy { dest: *dest, src: prev_dest };
+                            changed = true;
+                        } else {
+                            stack_map.insert(*frame_offset, *dest);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        changed
+    }
+
+    fn pass_copy_propagation(&self, func: &mut MirFunction) -> bool {
+        let mut changed = false;
+        let mut copy_map: HashMap<VReg, VReg> = HashMap::new();
+
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                if let MirInst::Copy { dest, src } = inst {
+                    if dest != src {
+                        let mut resolved = *src;
+                        while let Some(&next) = copy_map.get(&resolved) {
+                            resolved = next;
+                        }
+                        copy_map.insert(*dest, resolved);
                     }
                 }
+            }
+        }
+
+        if copy_map.is_empty() {
+            return false;
+        }
+
+        let resolve = |v: VReg| -> VReg {
+            let mut curr = v;
+            while let Some(&next) = copy_map.get(&curr) {
+                curr = next;
+            }
+            curr
+        };
+
+        for block in &mut func.blocks {
+            for phi in &mut block.phis {
+                for (_, v) in &mut phi.incoming {
+                    let new_v = resolve(*v);
+                    if new_v != *v {
+                        *v = new_v;
+                        changed = true;
+                    }
+                }
+            }
+
+            for inst in &mut block.instructions {
+                match inst {
+                    MirInst::Binary { lhs, rhs, .. } => {
+                        let new_l = resolve(*lhs);
+                        let new_r = resolve(*rhs);
+                        if new_l != *lhs { *lhs = new_l; changed = true; }
+                        if new_r != *rhs { *rhs = new_r; changed = true; }
+                    }
+                    MirInst::Unary { operand, .. } => {
+                        let new_op = resolve(*operand);
+                        if new_op != *operand { *operand = new_op; changed = true; }
+                    }
+                    MirInst::Load { ptr, .. } => {
+                        let new_ptr = resolve(*ptr);
+                        if new_ptr != *ptr { *ptr = new_ptr; changed = true; }
+                    }
+                    MirInst::Store { ptr, val, .. } => {
+                        let new_ptr = resolve(*ptr);
+                        let new_val = resolve(*val);
+                        if new_ptr != *ptr { *ptr = new_ptr; changed = true; }
+                        if new_val != *val { *val = new_val; changed = true; }
+                    }
+                    MirInst::GlobalSet { val, .. } => {
+                        let new_val = resolve(*val);
+                        if new_val != *val { *val = new_val; changed = true; }
+                    }
+                    MirInst::Call { args, .. } => {
+                        for a in args {
+                            let new_a = resolve(*a);
+                            if new_a != *a { *a = new_a; changed = true; }
+                        }
+                    }
+                    MirInst::CallIndirect { table_idx, args, .. } => {
+                        let new_t = resolve(*table_idx);
+                        if new_t != *table_idx { *table_idx = new_t; changed = true; }
+                        for a in args {
+                            let new_a = resolve(*a);
+                            if new_a != *a { *a = new_a; changed = true; }
+                        }
+                    }
+                    MirInst::Cast { val, .. } => {
+                        let new_val = resolve(*val);
+                        if new_val != *val { *val = new_val; changed = true; }
+                    }
+                    MirInst::Copy { src, .. } => {
+                        let new_src = resolve(*src);
+                        if new_src != *src { *src = new_src; changed = true; }
+                    }
+                    _ => {}
+                }
+            }
+
+            match &mut block.terminator {
+                Terminator::Branch { cond, .. } => {
+                    let new_c = resolve(*cond);
+                    if new_c != *cond { *cond = new_c; changed = true; }
+                }
+                Terminator::Return(Some(vr)) => {
+                    let new_vr = resolve(*vr);
+                    if new_vr != *vr { *vr = new_vr; changed = true; }
+                }
+                Terminator::TailCall { args, .. } => {
+                    for a in args {
+                        let new_a = resolve(*a);
+                        if new_a != *a { *a = new_a; changed = true; }
+                    }
+                }
+                Terminator::Throw(vr) => {
+                    let new_vr = resolve(*vr);
+                    if new_vr != *vr { *vr = new_vr; changed = true; }
+                }
+                _ => {}
             }
         }
 
@@ -269,8 +416,10 @@ impl Optimizer {
                     MirInst::Cast { val, .. } => {
                         used.insert(*val);
                     }
-                    MirInst::Copy { src, .. } => {
-                        used.insert(*src);
+                    MirInst::Copy { dest, src } => {
+                        if dest != src {
+                            used.insert(*src);
+                        }
                     }
                     _ => {}
                 }
@@ -306,8 +455,8 @@ impl Optimizer {
                 | MirInst::Unary { dest, .. }
                 | MirInst::GlobalGet { dest, .. }
                 | MirInst::StackAddr { dest, .. }
-                | MirInst::Cast { dest, .. }
-                | MirInst::Copy { dest, .. } => used.contains(dest),
+                | MirInst::Cast { dest, .. } => used.contains(dest),
+                MirInst::Copy { dest, src } => dest != src && used.contains(dest),
                 _ => true, // Preserve side-effecting operations
             });
             if block.instructions.len() != orig_len {

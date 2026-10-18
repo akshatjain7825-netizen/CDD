@@ -29,10 +29,10 @@ export async function instantiate(wasmBytes, userImports = {}) {
 
 export const exports = {
   get memory() { return wasmMemory; },
-  print: (arg0, arg1) => {
-    return wasmInstance.exports.print(arg0, arg1);
-  },
   main: () => {
     return wasmInstance.exports.main();
+  },
+  print: (arg0, arg1) => {
+    return wasmInstance.exports.print(arg0, arg1);
   },
 };

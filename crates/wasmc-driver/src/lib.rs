@@ -118,11 +118,13 @@ impl CompilationDriver {
         if sources.len() == 1 {
             let src = &sources[0];
             let src_hash = CompilationCache::compute_source_hash(&src.content);
-            let flags_hash = CompilationCache::compute_flags_hash(
+            let flags_hash = CompilationCache::compute_flags_hash_extended(
                 &self.options.target,
                 &self.options.opt_level,
                 self.options.debug,
                 self.options.shadow_stack_size,
+                self.options.emit_stack_check,
+                self.options.bundle_allocator,
             );
 
             if let Some(ref cache) = self.cache {
@@ -391,11 +393,13 @@ impl CompilationDriver {
         if sources.len() == 1 {
             let src = &sources[0];
             let src_hash = CompilationCache::compute_source_hash(&src.content);
-            let flags_hash = CompilationCache::compute_flags_hash(
+            let flags_hash = CompilationCache::compute_flags_hash_extended(
                 &self.options.target,
                 &self.options.opt_level,
                 self.options.debug,
                 self.options.shadow_stack_size,
+                self.options.emit_stack_check,
+                self.options.bundle_allocator,
             );
             if let Some(ref cache) = self.cache {
                 let _ = cache.store_unit(&src.path, &src_hash, &flags_hash, &wasm_bytes);

@@ -1,5 +1,8 @@
 # Source Language Reference Manual (`wasmc`)
 
+> **Living Docs Role: Constitution**
+> Governed under ECC `living-docs-governance`. This document, alongside the formal specifications in `docs/specs/*`, defines the immutable grammatical rules, lexical conventions, and type rules of the source language.
+
 ## 1. Lexical Grammar
 
 ### 1.1 Source Encoding

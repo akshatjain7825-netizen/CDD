@@ -45,7 +45,12 @@
     local.get 1
     i32.le_s
     local.tee 2
+    i32.eqz
     br_if 1
+    end
+    i32.const 1
+    local.tee 3
+    return
     end
     i32.const 1
     local.set 4
@@ -59,10 +64,6 @@
     local.get 6
     i32.mul
     local.tee 7
-    return
-    end
-    i32.const 1
-    local.tee 3
     return
     end
   )

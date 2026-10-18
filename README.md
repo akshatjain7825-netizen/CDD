@@ -8,6 +8,8 @@
 
 It translates a statically typed, imperative systems programming language directly into valid WebAssembly binary modules (`.wasm`) **without routing compilation through LLVM, Binaryen, C/C++, Emscripten, or external assemblers**.
 
+> 🚀 **Quickstart & Live Demo:** Follow the step-by-step [Interactive Demonstration Runbook](docs/DEMO_RUNBOOK.md) to build, test, run, and benchmark the entire compiler toolchain in minutes.
+
 ---
 
 ## Key Features
@@ -122,12 +124,21 @@ cargo test --workspace
 
 ## Technical Documentation
 
+### Engineering Docs
+- [Interactive Demonstration Runbook](docs/DEMO_RUNBOOK.md) *(Start Here for Live Demos)*
 - [Architecture Specification](docs/ARCHITECTURE.md)
 - [Language Reference Manual](docs/LANGUAGE_REFERENCE.md)
 - [Implementation Gap Analysis](docs/IMPLEMENTATION_GAP_ANALYSIS.md)
 - [Requirement Traceability Matrix](docs/IMPLEMENTATION_STATUS.md)
 - [Automated Test & Verification Report](docs/TEST_REPORT.md)
 - [Toolchain Limitations](docs/LIMITATIONS.md)
+
+### Formal Specifications (`docs/specs/`)
+- [Software Requirements Specification — SRS](docs/specs/srs.md)
+- [Functional Requirements Document — FRD](docs/specs/frd.md)
+- [High-Level Design — HLD](docs/specs/hld.md)
+- [Low-Level Design — LLD](docs/specs/lld.md)
+- [Software Design Document — SDD](docs/specs/sdd.md)
 
 ---
 

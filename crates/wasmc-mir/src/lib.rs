@@ -274,8 +274,8 @@ impl MirBuilder {
             Terminator::Branch { true_block, false_block, .. } => {
                 let tb = *true_block;
                 let fb = *false_block;
-                self.blocks[cur.0 as usize].successors.push(tb);
                 self.blocks[cur.0 as usize].successors.push(fb);
+                self.blocks[cur.0 as usize].successors.push(tb);
                 self.blocks[tb.0 as usize].predecessors.push(cur);
                 self.blocks[fb.0 as usize].predecessors.push(cur);
             }
@@ -362,6 +362,14 @@ pub fn lower_hir_to_mir(hir: HirModule) -> MirModule {
         }
 
         lower_hir_stmt(&f.body, &mut builder, ret_ty);
+
+        // Ensure current block (and any unterminated block falling through in a void function) has a return terminator
+        let cur = builder.current_block.0 as usize;
+        if cur < builder.blocks.len() && builder.blocks[cur].terminator == Terminator::Unreachable {
+            if ret_ty == MirType::Void {
+                builder.blocks[cur].terminator = Terminator::Return(None);
+            }
+        }
 
         // Ensure every block has a terminator
         for block in &mut builder.blocks {
@@ -741,7 +749,7 @@ fn lower_hir_expr(expr: &HirExpr, b: &mut MirBuilder) -> VReg {
                 func_name: *callee,
                 args: arg_regs,
             });
-            dest.unwrap_or(VReg(0))
+            dest.unwrap_or_else(|| b.new_vreg(MirType::Void))
         }
         HirExpr::CallIndirect(target, args, _) => {
             let tbl_reg = lower_hir_expr(target, b);
@@ -756,7 +764,7 @@ fn lower_hir_expr(expr: &HirExpr, b: &mut MirBuilder) -> VReg {
                 table_idx: tbl_reg,
                 args: arg_regs,
             });
-            dest.unwrap_or(VReg(0))
+            dest.unwrap_or_else(|| b.new_vreg(MirType::Void))
         }
         HirExpr::Load { ptr, offset, align, ty: load_sem_ty } => {
             let p_reg = lower_hir_expr(ptr, b);

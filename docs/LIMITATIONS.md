@@ -1,5 +1,8 @@
 # Toolchain Limitations & Scope Constraints — `wasmc`
 
+> **Living Docs Role: Live Status**
+> Governed under ECC `living-docs-governance`. This document defines explicit toolchain boundaries, unsupported proposals, and intentional non-goals.
+
 ## 1. Scope & Target Constraints
 
 ### 1.1 WebAssembly Specification Profile

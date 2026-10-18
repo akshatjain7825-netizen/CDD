@@ -1,5 +1,8 @@
 # Architecture Specification — Direct-to-WebAssembly Compiler (`wasmc`)
 
+> **Living Docs Role: Architecture Map**
+> Governed under ECC `living-docs-governance`. This document is the canonical map of system components, pipeline layers, crate boundaries, and data representations.
+
 ## 1. System Overview
 
 `wasmc` is an optimizing, direct-to-binary WebAssembly compiler toolchain written in pure Rust (2024 edition). It compiles a statically typed imperative systems language directly into valid WebAssembly (`.wasm`) binary modules without relying on LLVM, Binaryen, C/C++, Emscripten, or external assemblers.
@@ -160,3 +163,17 @@ WebAssembly Core 2.0 sections are serialized directly into raw bytes obeying str
 13. `Custom` (Section 0, name section & debug info)
 
 Variable-length integers are encoded via a canonical LEB128 codec enforcing 5-byte maximum boundaries for 32-bit values.
+
+---
+
+## 6. Formal Specification Documents
+
+The following IEEE/ISO-aligned specification documents are located in [`docs/specs/`](specs/):
+
+| Document | File | Scope |
+|:---|:---|:---|
+| Software Requirements Specification | [specs/srs.md](specs/srs.md) | Functional and non-functional requirements |
+| Functional Requirements Document | [specs/frd.md](specs/frd.md) | Feature-level requirement decomposition |
+| High-Level Design | [specs/hld.md](specs/hld.md) | System context, module boundaries, interfaces |
+| Low-Level Design | [specs/lld.md](specs/lld.md) | Data structures, algorithms, API contracts |
+| Software Design Document | [specs/sdd.md](specs/sdd.md) | End-to-end design synthesis and traceability |

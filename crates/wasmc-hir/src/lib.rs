@@ -150,7 +150,10 @@ impl<'a> HirLowerer<'a> {
     }
 
     fn lower_stmt(&self, idx: NodeIndex, locals: &[SymbolEntry]) -> HirStmt {
-        match self.pool.get(idx) {
+        let Some(node) = self.pool.try_get(idx) else {
+            return HirStmt::Block(Vec::new());
+        };
+        match node {
             AstNode::BlockStmt(stmts) => {
                 let lowered = stmts.iter().map(|&s| self.lower_stmt(s, locals)).collect();
                 HirStmt::Block(lowered)
@@ -165,12 +168,12 @@ impl<'a> HirLowerer<'a> {
                 if let Some(init_idx) = init {
                     let expr = self.lower_expr(*init_idx, locals);
                     match storage {
-                        StorageClass::ShadowStack { frame_offset, align_bytes, .. } => {
+                        StorageClass::ShadowStack { align_bytes, .. } => {
                             let ptr = HirExpr::AddrOf(*name, storage, SemType::Pointer(Box::new(expr.ty().clone())));
                             HirStmt::Store {
                                 ptr,
                                 val: expr,
-                                offset: frame_offset as u32,
+                                offset: 0,
                                 align: align_bytes,
                             }
                         }
@@ -192,12 +195,12 @@ impl<'a> HirLowerer<'a> {
                             .unwrap_or(StorageClass::VirtualLocal { local_idx: 0 });
 
                         match storage {
-                            StorageClass::ShadowStack { frame_offset, align_bytes, .. } => {
+                            StorageClass::ShadowStack { align_bytes, .. } => {
                                 let ptr = HirExpr::AddrOf(*sym, storage, SemType::Pointer(Box::new(rhs_expr.ty().clone())));
                                 HirStmt::Store {
                                     ptr,
                                     val: rhs_expr,
-                                    offset: frame_offset as u32,
+                                    offset: 0,
                                     align: align_bytes,
                                 }
                             }
@@ -260,7 +263,11 @@ impl<'a> HirLowerer<'a> {
             .cloned()
             .unwrap_or(SemType::I32);
 
-        match self.pool.get(idx) {
+        let Some(node) = self.pool.try_get(idx) else {
+            return HirExpr::Literal(LiteralValue::Integer(0), ty);
+        };
+
+        match node {
             AstNode::LiteralExpr(lit) => HirExpr::Literal(lit.clone(), ty),
             AstNode::VariableExpr(sym) => {
                 let storage = locals

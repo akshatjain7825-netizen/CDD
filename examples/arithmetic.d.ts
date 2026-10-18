@@ -3,7 +3,7 @@ export function instantiate(bytes: BufferSource | WebAssembly.Module, imports?: 
 
 export namespace exports {
   export const memory: WebAssembly.Memory;
-  export function add(arg0: number, arg1: number): number;
-  export function float_calc(arg0: number, arg1: number): number;
   export function compute(arg0: number, arg1: number): number;
+  export function float_calc(arg0: number, arg1: number): number;
+  export function add(arg0: number, arg1: number): number;
 }

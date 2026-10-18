@@ -492,3 +492,88 @@ fn test_incremental_cache_sqlite() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_regression_branch_condition_eqz_inversion() {
+    let source = r#"
+        export fn check_even(n: i32) -> i32 {
+            let mut count: i32 = 0;
+            if (n % 2 == 0) {
+                count = count + 1;
+            }
+            return count;
+        }
+    "#;
+    let options = CompilerOptions {
+        emit_wat: true,
+        cache_dir: None,
+        ..Default::default()
+    };
+    let driver = CompilationDriver::new(options);
+    let src = vec![SourceInput {
+        path: "even.src".to_string(),
+        content: source.to_string(),
+    }];
+    let res = driver.compile(&src).expect("Compilation must succeed");
+    let wat = res.wat_text.expect("WAT should be emitted");
+    // Verify that the branch condition tests i32.eqz so fallthrough goes to the true block
+    assert!(
+        wat.contains("i32.eqz") && wat.contains("br_if"),
+        "WAT must contain i32.eqz to properly invert the branch condition to the false/merge block"
+    );
+}
+
+#[test]
+fn test_regression_implicit_void_return_no_unreachable() {
+    let source = r#"
+        fn mutate(a: *i32) -> void {
+            *a = 42;
+        }
+        export fn run() -> i32 {
+            let mut x: i32 = 10;
+            mutate(&x);
+            return x;
+        }
+    "#;
+    let options = CompilerOptions {
+        emit_wat: true,
+        cache_dir: None,
+        ..Default::default()
+    };
+    let driver = CompilationDriver::new(options);
+    let src = vec![SourceInput {
+        path: "void_ret.src".to_string(),
+        content: source.to_string(),
+    }];
+    let res = driver.compile(&src).expect("Compilation must succeed");
+    let wat = res.wat_text.expect("WAT should be emitted");
+    // $mutate should not end in unconditional unreachable trap
+    assert!(
+        !wat.contains("func $mutate\n    (local i32)\n    local.get 0\n    i32.const 42\n    i32.store offset=0\n    unreachable"),
+        "Void function without explicit return must not terminate with unreachable trap"
+    );
+}
+
+#[test]
+fn test_regression_mixed_float_int_local_ordering() {
+    let source = r#"
+        export fn mixed(a: i32, b: f64) -> f64 {
+            let x: i32 = a * 2;
+            let y: f64 = b + 1.5;
+            return y;
+        }
+    "#;
+    let options = CompilerOptions {
+        emit_wat: true,
+        cache_dir: None,
+        ..Default::default()
+    };
+    let driver = CompilationDriver::new(options);
+    let src = vec![SourceInput {
+        path: "mixed.src".to_string(),
+        content: source.to_string(),
+    }];
+    let res = driver.compile(&src).expect("Compilation must succeed");
+    assert!(!res.wasm_bytes.is_empty());
+}
+

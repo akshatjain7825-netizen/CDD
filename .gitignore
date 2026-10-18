@@ -1,2 +1,37 @@
+# ============================================================
+# CDD/.gitignore — wasmc Cargo workspace
+# ============================================================
+
+# ----- Rust / Cargo build output -----
 /target/
+
+# ----- wasmc incremental build cache (SQLite WAL-mode) -----
 /.wasmc-cache/
+crates/**/.wasmc-cache/
+*.db
+*.db-wal
+*.db-shm
+
+# ----- OS temporaries -----
+Thumbs.db
+Desktop.ini
+.DS_Store
+.DS_Store?
+._*
+
+# ----- IDE / Editor -----
+.vscode/settings.json
+.idea/
+*.suo
+*.user
+*.swp
+*~
+
+# ----- Node.js (scripts/) -----
+node_modules/
+npm-debug.log*
+
+# ----- Golden reference artifacts — DO NOT IGNORE -----
+# examples/*.src — compiler source input test fixtures (golden)
+# examples/*.wat — reference WAT disassembly golden files (golden)
+# Both are intentionally version-controlled.
